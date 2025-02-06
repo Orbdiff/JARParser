@@ -17,38 +17,14 @@ $filteredFiles = $files | Where-Object {
     ($_.Name -match "java|javaw") -and ($_.LastWriteTime -gt $logonTime)
 }
 
-function Is-JarFile {
-    param (
-        [string]$filePath
-    )
-
-    try {
-        $zipFile = [System.IO.Compression.ZipFile]::OpenRead($filePath)
-        $manifestExists = $false
-        
-        foreach ($entry in $zipFile.Entries) {
-            if ($entry.FullName -eq "META-INF/MANIFEST.MF") {
-                $manifestExists = $true
-                break
-            }
-        }
-
-        $zipFile.Dispose()
-
-        return $manifestExists
-    } catch {
-        return $false
-    }
-}
-
 if ($filteredFiles.Count -gt 0) {
     Write-Host "PF files found after logon time.." -ForegroundColor Gray
     $filteredFiles | ForEach-Object { 
         Write-Host " "
-        Write-Host $_.FullName
+        Write-Host $_.FullName -ForegroundColor DarkCyan
         $prefetchFilePath = $_.FullName
         $pecmdOutput = & $pecmdPath -f $prefetchFilePath
-        $filteredImports = $pecmdOutput | Where-Object { $_ -match "\\VOLUME{(.+?)}" }
+        $filteredImports = $pecmdOutput
 
         if ($filteredImports.Count -gt 0) {
             Write-Host "Imports found:" -ForegroundColor DarkYellow
@@ -58,14 +34,23 @@ if ($filteredFiles.Count -gt 0) {
                     $line = $line -replace '\\VOLUME{(.+?)}', 'C:'
                 }
                 $line = $line -replace '^\d+: ', ''
-                if (Is-JarFile -filePath $line) {
-                    if ($line -match '\.jar$') {
-                        Write-Host "Valid .jar file:" -NoNewline -ForegroundColor Green
-                        Write-Host "  $line"
-                    } else {
-                        Write-Host "File .jar modified extension" -NoNewline -ForegroundColor Red
-                        Write-Host "  $line"
+
+                try {
+                    if ((Get-Content $line -First 1 -ErrorAction SilentlyContinue) -match 'PK\x03\x04') {
+                        if ($line -notmatch "\.jar$") {
+                            Write-Host "File .jar modified extension: $line " -ForegroundColor DarkRed
+                        } else {
+                            Write-Host "Valid .jar file: $line" -ForegroundColor DarkGreen
+                        }
                     }
+                } catch {
+                    if ($line -match "\.jar$") {
+                        Write-Host "File .jar deleted maybe: $line" -ForegroundColor DarkYellow
+                    }
+                }
+
+                if ($line -match "\.jar$" -and !(Test-Path $line)) {
+                    Write-Host "File .jar deleted maybe: $line" -ForegroundColor DarkYellow
                 }
             }
         } else {
