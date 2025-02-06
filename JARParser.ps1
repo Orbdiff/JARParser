@@ -17,33 +17,67 @@ $filteredFiles = $files | Where-Object {
     ($_.Name -match "java|javaw") -and ($_.LastWriteTime -gt $logonTime)
 }
 
+function Is-JarFile {
+    param (
+        [string]$filePath
+    )
+
+    try {
+        $zipFile = [System.IO.Compression.ZipFile]::OpenRead($filePath)
+        $manifestExists = $false
+        
+        foreach ($entry in $zipFile.Entries) {
+            if ($entry.FullName -eq "META-INF/MANIFEST.MF") {
+                $manifestExists = $true
+                break
+            }
+        }
+
+        $zipFile.Dispose()
+
+        return $manifestExists
+    } catch {
+        return $false
+    }
+}
+
 if ($filteredFiles.Count -gt 0) {
-    Write-Host "PF files found after logon time.." -ForegroundColor DarkGray
+    Write-Host "PF files found after logon time.." -ForegroundColor Gray
     $filteredFiles | ForEach-Object { 
+        Write-Host " "
         Write-Host $_.FullName
         $prefetchFilePath = $_.FullName
         $pecmdOutput = & $pecmdPath -f $prefetchFilePath
-        $filteredImports = $pecmdOutput | Where-Object { $_ -match "\.jar$" }
+        $filteredImports = $pecmdOutput | Where-Object { $_ -match "\\VOLUME{(.+?)}" }
 
         if ($filteredImports.Count -gt 0) {
-            Write-Host "Imports found ending with .jar:" -ForegroundColor DarkYellow
+            Write-Host "Imports found:" -ForegroundColor DarkYellow
             $filteredImports | ForEach-Object {
                 $line = $_
                 if ($line -match '\\VOLUME{(.+?)}') {
-                    $line = $line -replace '\\VOLUME{(.+?)}', ''
+                    $line = $line -replace '\\VOLUME{(.+?)}', 'C:'
                 }
                 $line = $line -replace '^\d+: ', ''
-                Write-Host $line
+                if (Is-JarFile -filePath $line) {
+                    if ($line -match '\.jar$') {
+                        Write-Host "Valid .jar file:" -NoNewline -ForegroundColor Green
+                        Write-Host "  $line"
+                    } else {
+                        Write-Host "File .jar modified extension" -NoNewline -ForegroundColor Red
+                        Write-Host "  $line"
+                    }
+                }
             }
         } else {
-            Write-Host "No imports ending with .jar found for the file $($_.Name)." -ForegroundColor Red
+            Write-Host "No imports found for the file $($_.Name)." -ForegroundColor Red
         }
     }
 } else {
     Write-Host "No PF files containing 'java' or 'javaw' and modified after logon time were found." -ForegroundColor Red
 }
 
-Write-Host "Searching for DcomLaunch PID..." -ForegroundColor DarkGray
+Write-Output " "
+Write-Host "Searching for DcomLaunch PID..." -ForegroundColor Gray
 
 $pidDcomLaunch = (Get-CimInstance -ClassName Win32_Service | Where-Object { $_.Name -eq 'DcomLaunch' }).ProcessId
 
