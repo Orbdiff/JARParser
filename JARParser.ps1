@@ -18,7 +18,7 @@ $filteredFiles = $files | Where-Object {
 }
 
 if ($filteredFiles.Count -gt 0) {
-    Write-Host "PF files found after logon time.." -ForegroundColor Gray
+    Write-Host "PF files found after logon time.." -ForegroundColor DarkGray
     $filteredFiles | ForEach-Object { 
         Write-Host $_.FullName
         $prefetchFilePath = $_.FullName
@@ -43,7 +43,7 @@ if ($filteredFiles.Count -gt 0) {
     Write-Host "No PF files containing 'java' or 'javaw' and modified after logon time were found." -ForegroundColor Red
 }
 
-Write-Host "Searching for DcomLaunch PID..." -ForegroundColor Gray
+Write-Host "Searching for DcomLaunch PID..." -ForegroundColor DarkGray
 
 $pidDcomLaunch = (Get-CimInstance -ClassName Win32_Service | Where-Object { $_.Name -eq 'DcomLaunch' }).ProcessId
 
