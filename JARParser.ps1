@@ -2,12 +2,15 @@ Clear-Host
 
 $pecmdUrl = "https://github.com/NoDiff-del/JARs/releases/download/Jar/PECmd.exe"
 $xxstringsUrl = "https://github.com/NoDiff-del/JARs/releases/download/Jar/xxstrings64.exe"
+$jarparserUrl = "https://github.com/Orbdiff/JARParser/releases/download/Jar/JARParser.exe"
 
 $pecmdPath = "$env:TEMP\PECmd.exe"
 $xxstringsPath = "$env:TEMP\xxstrings64.exe"
+$jarparserPath = "$env:TEMP\JARParser.exe"
 
 Invoke-WebRequest -Uri $pecmdUrl -OutFile $pecmdPath
 Invoke-WebRequest -Uri $xxstringsUrl -OutFile $xxstringsPath
+Invoke-WebRequest -Uri $jarparserUrl -OutFile $jarparserPath
 
 $logonTime = (Get-CimInstance -ClassName Win32_OperatingSystem).LastBootUpTime
 
@@ -74,3 +77,6 @@ if ($xxstringsOutput) {
 } else {
     Write-Host "No strings containing '-jar' were found in DcomLaunch process memory." -ForegroundColor Red
 }
+
+Write-Output " "
+& $jarparserPath # only execute :)
