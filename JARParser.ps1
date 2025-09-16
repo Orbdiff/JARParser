@@ -12,7 +12,33 @@ Invoke-WebRequest -Uri $pecmdUrl -OutFile $pecmdPath
 Invoke-WebRequest -Uri $xxstringsUrl -OutFile $xxstringsPath
 Invoke-WebRequest -Uri $jarparserUrl -OutFile $jarparserPath
 
-$logonTime = (Get-CimInstance -ClassName Win32_OperatingSystem).LastBootUpTime
+$volumeMap = @{}
+Get-CimInstance Win32_Volume | ForEach-Object {
+    if ($_.DriveLetter) {
+        $serial = "{0:x}" -f ([uint32]$_.SerialNumber)
+        $volumeMap[$serial] = $_.DriveLetter
+    }
+}
+
+function Convert-VolumePath {
+    param([string]$path)
+
+    if ($path -match '\\VOLUME{[0-9A-Fa-f\-]+-([0-9a-f]+)}\\(.+)') {
+        $serial = $matches[1]
+        $relative = $matches[2]
+
+        if ($volumeMap.ContainsKey($serial)) {
+            return "$($volumeMap[$serial])\$relative"
+        } else {
+            return $path
+        }
+    }
+    return $path
+}
+
+$logonTime = (Get-CimInstance Win32_LogonSession | Where-Object { $_.LogonType -in 2,10 } |
+    Sort-Object StartTime -Descending |
+    Select-Object -First 1).StartTime
 
 $prefetchFolder = "C:\Windows\Prefetch"
 $files = Get-ChildItem -Path $prefetchFolder -Filter *.pf
@@ -21,7 +47,7 @@ $filteredFiles = $files | Where-Object {
 }
 
 if ($filteredFiles.Count -gt 0) {
-    Write-Host "PF files found after logon time.." -ForegroundColor Gray
+    Write-Host "PF files found after user logon time.." -ForegroundColor Gray
     $filteredFiles | ForEach-Object { 
         Write-Host " "
         Write-Host $_.FullName -ForegroundColor DarkCyan
@@ -32,16 +58,13 @@ if ($filteredFiles.Count -gt 0) {
         if ($filteredImports.Count -gt 0) {
             Write-Host "Imports found:" -ForegroundColor DarkYellow
             $filteredImports | ForEach-Object {
-                $line = $_
-                if ($line -match '\\VOLUME{(.+?)}') {
-                    $line = $line -replace '\\VOLUME{(.+?)}', 'C:'
-                }
-                $line = $line -replace '^\d+: ', ''
+                $line = $_ -replace '^\d+: ', ''
+                $line = Convert-VolumePath $line
 
                 try {
                     if ((Get-Content $line -First 1 -ErrorAction SilentlyContinue) -match 'PK\x03\x04') {
                         if ($line -notmatch "\.jar$") {
-                            Write-Host "File .jar modified extension: $line " -ForegroundColor DarkRed
+                            Write-Host "File .jar modified extension: $line" -ForegroundColor DarkRed
                         } else {
                             Write-Host "Valid .jar file: $line" -ForegroundColor DarkGreen
                         }
