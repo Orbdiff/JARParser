@@ -1,105 +1,67 @@
 Clear-Host
 
-$pecmdUrl = "https://github.com/NoDiff-del/JARs/releases/download/Jar/PECmd.exe"
-$xxstringsUrl = "https://github.com/NoDiff-del/JARs/releases/download/Jar/xxstrings64.exe"
-$jarparserUrl = "https://github.com/Orbdiff/JARParser/releases/download/Jar/JARParser.exe"
+$ProgressPreference = 'SilentlyContinue'
 
-$pecmdPath = "$env:TEMP\PECmd.exe"
-$xxstringsPath = "$env:TEMP\xxstrings64.exe"
-$jarparserPath = "$env:TEMP\JARParser.exe"
+$folder = "$env:TEMP\JARParserTool"
+if (-not (Test-Path $folder)) { New-Item -Path $folder -ItemType Directory | Out-Null }
 
-Invoke-WebRequest -Uri $pecmdUrl -OutFile $pecmdPath
-Invoke-WebRequest -Uri $xxstringsUrl -OutFile $xxstringsPath
-Invoke-WebRequest -Uri $jarparserUrl -OutFile $jarparserPath
+$url1 = "https://github.com/Orbdiff/JARParser/releases/download/v1.1/JARParser.exe"
+$url2 = "https://github.com/Orbdiff/JARParser/releases/download/v1.1/JarInspector.class"
 
-$volumeMap = @{}
-Get-CimInstance Win32_Volume | ForEach-Object {
-    if ($_.DriveLetter) {
-        $serial = "{0:x}" -f ([uint32]$_.SerialNumber)
-        $volumeMap[$serial] = $_.DriveLetter
+$file1 = Join-Path $folder "JARParser.exe"
+$file2 = Join-Path $folder "JarInspector.class"
+
+Invoke-WebRequest -Uri $url1 -OutFile $file1
+Invoke-WebRequest -Uri $url2 -OutFile $file2
+
+if (-not (Test-Path $file1)) { exit }
+if (-not (Test-Path $file2)) { exit }
+
+function Enable-SeDebugPrivilege {
+    $definition = @"
+using System;
+using System.Runtime.InteropServices;
+
+public class TokenManipulator {
+    [DllImport("advapi32.dll", ExactSpelling = true, SetLastError = true)]
+    internal static extern bool OpenProcessToken(IntPtr ProcessHandle, int DesiredAccess, out IntPtr TokenHandle);
+    [DllImport("advapi32.dll", SetLastError = true)]
+    internal static extern bool LookupPrivilegeValue(string lpSystemName, string lpName, out long lpLuid);
+    [DllImport("advapi32.dll", ExactSpelling = true, SetLastError = true)]
+    internal static extern bool AdjustTokenPrivileges(IntPtr TokenHandle, bool DisableAllPrivileges, ref TOKEN_PRIVILEGES NewState, int BufferLength, IntPtr PreviousState, IntPtr ReturnLength);
+
+    internal const int TOKEN_ADJUST_PRIVILEGES = 0x20;
+    internal const int TOKEN_QUERY = 0x8;
+    internal const int SE_PRIVILEGE_ENABLED = 0x2;
+
+    [StructLayout(LayoutKind.Sequential, Pack = 1)]
+    internal struct TOKEN_PRIVILEGES {
+        public int PrivilegeCount;
+        public long Luid;
+        public int Attributes;
     }
-}
 
-function Convert-VolumePath {
-    param([string]$path)
-
-    if ($path -match '\\VOLUME{[0-9A-Fa-f\-]+-([0-9a-f]+)}\\(.+)') {
-        $serial = $matches[1]
-        $relative = $matches[2]
-
-        if ($volumeMap.ContainsKey($serial)) {
-            return "$($volumeMap[$serial])\$relative"
-        } else {
-            return $path
-        }
-    }
-    return $path
-}
-
-$logonTime = (Get-CimInstance Win32_LogonSession | Where-Object { $_.LogonType -in 2,10 } |
-    Sort-Object StartTime -Descending |
-    Select-Object -First 1).StartTime
-
-$prefetchFolder = "C:\Windows\Prefetch"
-$files = Get-ChildItem -Path $prefetchFolder -Filter *.pf
-$filteredFiles = $files | Where-Object { 
-    ($_.Name -match "java|javaw") -and ($_.LastWriteTime -gt $logonTime)
-}
-
-if ($filteredFiles.Count -gt 0) {
-    Write-Host "PF files found after user logon time.." -ForegroundColor Gray
-    $filteredFiles | ForEach-Object { 
-        Write-Host " "
-        Write-Host $_.FullName -ForegroundColor DarkCyan
-        $prefetchFilePath = $_.FullName
-        $pecmdOutput = & $pecmdPath -f $prefetchFilePath
-        $filteredImports = $pecmdOutput
-
-        if ($filteredImports.Count -gt 0) {
-            Write-Host "Imports found:" -ForegroundColor DarkYellow
-            $filteredImports | ForEach-Object {
-                $line = $_ -replace '^\d+: ', ''
-                $line = Convert-VolumePath $line
-
-                try {
-                    if ((Get-Content $line -First 1 -ErrorAction SilentlyContinue) -match 'PK\x03\x04') {
-                        if ($line -notmatch "\.jar$") {
-                            Write-Host "File .jar modified extension: $line" -ForegroundColor DarkRed
-                        } else {
-                            Write-Host "Valid .jar file: $line" -ForegroundColor DarkGreen
-                        }
-                    }
-                } catch {
-                    if ($line -match "\.jar$") {
-                        Write-Host "File .jar deleted maybe: $line" -ForegroundColor DarkYellow
-                    }
-                }
-
-                if ($line -match "\.jar$" -and !(Test-Path $line)) {
-                    Write-Host "File .jar deleted maybe: $line" -ForegroundColor DarkYellow
-                }
+    public static void EnablePrivilege(string privilege) {
+        IntPtr hToken;
+        if (OpenProcessToken(System.Diagnostics.Process.GetCurrentProcess().Handle, TOKEN_ADJUST_PRIVILEGES | TOKEN_QUERY, out hToken)) {
+            long luid;
+            if (LookupPrivilegeValue(null, privilege, out luid)) {
+                TOKEN_PRIVILEGES tp;
+                tp.PrivilegeCount = 1;
+                tp.Luid = luid;
+                tp.Attributes = SE_PRIVILEGE_ENABLED;
+                AdjustTokenPrivileges(hToken, false, ref tp, 0, IntPtr.Zero, IntPtr.Zero);
             }
-        } else {
-            Write-Host "No imports found for the file $($_.Name)." -ForegroundColor Red
         }
     }
-} else {
-    Write-Host "No PF files containing 'java' or 'javaw' and modified after logon time were found." -ForegroundColor Red
+}
+"@
+    Add-Type $definition
+    [TokenManipulator]::EnablePrivilege("SeDebugPrivilege")
 }
 
-Write-Output " "
-Write-Host "Searching for DcomLaunch PID..." -ForegroundColor Gray
+Enable-SeDebugPrivilege
 
-$pidDcomLaunch = (Get-CimInstance -ClassName Win32_Service | Where-Object { $_.Name -eq 'DcomLaunch' }).ProcessId
+if (-not (Test-Path $file2)) { exit }
 
-$xxstringsOutput = & $xxstringsPath -p $pidDcomLaunch -raw | findstr /C:"-jar"
-
-if ($xxstringsOutput) {
-    Write-Host "Strings found in DcomLaunch process memory containing '-jar':" -ForegroundColor DarkYellow
-    $xxstringsOutput | ForEach-Object { Write-Host $_ }
-} else {
-    Write-Host "No strings containing '-jar' were found in DcomLaunch process memory." -ForegroundColor Red
-}
-
-Write-Output " "
-& $jarparserPath # only execute :)
+Start-Process -FilePath $file1 -WorkingDirectory $folder -Verb RunAs
