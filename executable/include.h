@@ -1,4 +1,4 @@
-#pragma once
+﻿#pragma once
 
 #define _CRT_SECURE_NO_WARNINGS
 #include <windows.h>
@@ -15,6 +15,8 @@
 #include "DcomLaunch_strings.h"
 #include "usnjrnl_parser.h"
 
+#include <jni.h>
+
 static void print_jar(wchar_t* text) {
     HANDLE hConsole = GetStdHandle(STD_OUTPUT_HANDLE);
     CONSOLE_SCREEN_BUFFER_INFO csbi;
@@ -22,7 +24,7 @@ static void print_jar(wchar_t* text) {
     WORD originalAttrs = csbi.wAttributes;
 
     SetConsoleTextAttribute(hConsole, FOREGROUND_GREEN | FOREGROUND_INTENSITY);
-    wprintf(L"Valid File JAR: %ls\n", text);
+    wprintf(L"Valid File JAR: %ls", text);
     SetConsoleTextAttribute(hConsole, originalAttrs);
 }
 
@@ -32,7 +34,7 @@ static void print_volume(wchar_t* text) {
     GetConsoleScreenBufferInfo(hConsole, &csbi);
     WORD originalAttrs = csbi.wAttributes;
 
-    SetConsoleTextAttribute(hConsole, FOREGROUND_RED | FOREGROUND_GREEN | FOREGROUND_INTENSITY);
+    SetConsoleTextAttribute(hConsole, FOREGROUND_RED | FOREGROUND_GREEN);
     wprintf(L"Not Found: %ls\n", text);
     SetConsoleTextAttribute(hConsole, originalAttrs);
 }
@@ -48,7 +50,148 @@ static void print_modified(wchar_t* text) {
     SetConsoleTextAttribute(hConsole, originalAttrs);
 }
 
-static void JARParser(void) {
+int ReadRegistryStringC(HKEY hKeyRoot, const wchar_t* subKey, const wchar_t* valueName, wchar_t* buffer, DWORD bufferSize) {
+    HKEY hKey;
+    LONG result = RegOpenKeyExW(hKeyRoot, subKey, 0, KEY_READ, &hKey);
+    if (result != ERROR_SUCCESS) {
+        return 0;
+    }
+
+    DWORD type = 0;
+    result = RegQueryValueExW(hKey, valueName, NULL, &type, (LPBYTE)buffer, &bufferSize);
+    RegCloseKey(hKey);
+
+    if (result != ERROR_SUCCESS || type != REG_SZ) {
+        return 0;
+    }
+
+    buffer[(bufferSize / sizeof(wchar_t)) - 1] = L'\0';
+    return 1;
+}
+
+void CallJarInspector_listClasses(JNIEnv* env, const char* jarPath) {
+    jclass cls = (*env)->FindClass(env, "JarInspector");
+    if (cls == NULL) {
+        (*env)->ExceptionDescribe(env);
+        return;
+    }
+
+    jmethodID mid = (*env)->GetStaticMethodID(env, cls, "listClasses", "(Ljava/lang/String;)[Ljava/lang/String;");
+    if (mid == NULL) {
+        (*env)->ExceptionDescribe(env);
+        return;
+    }
+
+    jstring jJarPath = (*env)->NewStringUTF(env, jarPath);
+    if (!jJarPath) {
+        return;
+    }
+
+    jobjectArray classArray = (jobjectArray)(*env)->CallStaticObjectMethod(env, cls, mid, jJarPath);
+
+    if ((*env)->ExceptionCheck(env)) {
+        (*env)->ExceptionDescribe(env);
+        (*env)->ExceptionClear(env);
+        return;
+    }
+
+    if (classArray == NULL) {
+        return;
+    }
+
+    jsize length = (*env)->GetArrayLength(env, classArray);
+
+    for (jsize i = 0; i < length; i++) {
+        jstring className = (jstring)(*env)->GetObjectArrayElement(env, classArray, i);
+        const char* cClassName = (*env)->GetStringUTFChars(env, className, NULL);
+        printf("  %s\n", cClassName);
+        (*env)->ReleaseStringUTFChars(env, className, cClassName);
+        (*env)->DeleteLocalRef(env, className);
+    }
+
+    (*env)->DeleteLocalRef(env, classArray);
+    (*env)->DeleteLocalRef(env, jJarPath);
+}
+
+static void inspectJarClasses(wchar_t* jarPath, JNIEnv* env) {
+    int size_needed = WideCharToMultiByte(CP_UTF8, 0, jarPath, -1, NULL, 0, NULL, NULL);
+    if (size_needed <= 0) {
+        return;
+    }
+
+    char* temp = (char*)malloc(size_needed);
+    if (!temp) {
+        return;
+    }
+    WideCharToMultiByte(CP_UTF8, 0, jarPath, -1, temp, size_needed, NULL, NULL);
+
+    if (env) {
+        CallJarInspector_listClasses(env, temp);
+    }
+
+    free(temp);
+}
+
+int GetJavaVM(JNIEnv** env, JavaVM** jvm) {
+    wchar_t currentVersion[128];
+    if (!ReadRegistryStringC(HKEY_LOCAL_MACHINE, L"SOFTWARE\\JavaSoft\\Java Runtime Environment", L"CurrentVersion", currentVersion, sizeof(currentVersion))) {
+        return 0;
+    }
+
+    wchar_t versionKey[256];
+    _snwprintf_s(versionKey, sizeof(versionKey) / sizeof(wchar_t), _TRUNCATE, L"SOFTWARE\\JavaSoft\\Java Runtime Environment\\%s", currentVersion);
+
+    wchar_t jvmDllPath[MAX_PATH];
+    if (!ReadRegistryStringC(HKEY_LOCAL_MACHINE, versionKey, L"RuntimeLib", jvmDllPath, sizeof(jvmDllPath))) {
+        return 0;
+    }
+
+    HMODULE hJvm = LoadLibraryW(jvmDllPath);
+    if (!hJvm) {
+        return 0;
+    }
+
+    typedef jint(JNICALL* CreateJavaVM_func)(JavaVM**, void**, void*);
+    CreateJavaVM_func JNI_CreateJavaVM = (CreateJavaVM_func)GetProcAddress(hJvm, "JNI_CreateJavaVM");
+    if (!JNI_CreateJavaVM) {
+        FreeLibrary(hJvm);
+        return 0;
+    }
+
+    JavaVMInitArgs vm_args;
+    vm_args.version = JNI_VERSION_1_8;
+    vm_args.nOptions = 0;
+    vm_args.options = NULL;
+    vm_args.ignoreUnrecognized = JNI_FALSE;
+
+    jint res = JNI_CreateJavaVM(jvm, (void**)env, &vm_args);
+    if (res != JNI_OK) {
+        FreeLibrary(hJvm);
+        return 0;
+    }
+
+    return 1;
+}
+
+BOOL is_jar_signature(const wchar_t* path) {
+    BYTE buffer[4];
+    DWORD bytesRead = 0;
+    HANDLE hFile = CreateFileW(path, GENERIC_READ, FILE_SHARE_READ, NULL,
+        OPEN_EXISTING, FILE_ATTRIBUTE_NORMAL, NULL);
+    if (hFile == INVALID_HANDLE_VALUE)
+        return FALSE;
+
+    BOOL result = FALSE;
+    if (ReadFile(hFile, buffer, 4, &bytesRead, NULL) && bytesRead == 4) {
+        if (buffer[0] == 'P' && buffer[1] == 'K' && buffer[2] == 0x03 && buffer[3] == 0x04)
+            result = TRUE;
+    }
+
+    CloseHandle(hFile);
+    return result;
+}
+
+void JARParser(void) {
     WIN32_FIND_DATAW ffd;
     HANDLE hFind = INVALID_HANDLE_VALUE;
     wchar_t searchPath[MAX_PATH];
@@ -63,6 +206,15 @@ static void JARParser(void) {
     hFind = FindFirstFileW(searchPath, &ffd);
     if (hFind == INVALID_HANDLE_VALUE) {
         wprintf(L"No Prefetch files found.\n");
+        return;
+    }
+
+    JavaVM* jvm = NULL;
+    JNIEnv* env = NULL;
+
+    //JVM
+    if (!GetJavaVM(&env, &jvm)) {
+        FindClose(hFind);
         return;
     }
 
@@ -84,7 +236,6 @@ static void JARParser(void) {
 
             prefetch_t* p = prefetch_open(path);
             if (!p || !prefetch_success(p)) {
-                wprintf(L"Could not parse %ls\n", ffd.cFileName);
                 if (p) prefetch_close(p);
                 continue;
             }
@@ -111,30 +262,22 @@ static void JARParser(void) {
                     wchar_t* fixed = ReplaceVolumeWithDrive(names[i]);
                     if (!fixed) continue;
 
-                    char temp[4096];
-                    size_t conv = wcstombs(temp, fixed, sizeof(temp) - 1);
-                    if (conv == (size_t)-1) { free(fixed); continue; }
-                    temp[conv] = '\0';
+                    DWORD attrs = GetFileAttributesW(fixed);
+                    BOOL exists = (attrs != INVALID_FILE_ATTRIBUTES && !(attrs & FILE_ATTRIBUTE_DIRECTORY));
 
-                    int isPK = 0;
-                    FILE* f = fopen(temp, "rb");
-                    if (f) {
-                        unsigned char sig[4] = { 0 };
-                        size_t r = fread(sig, 1, 4, f);
-                        fclose(f);
-                        if (r == 4 && sig[0] == 'P' && sig[1] == 'K' && sig[2] == 3 && sig[3] == 4)
-                            isPK = 1;
-                    }
-
-                    size_t len = wcslen(fixed);
-                    if (wcsstr(fixed, L"\\VOLUME{") != NULL) {
+                    if (!exists) {
                         print_volume(fixed);
                     }
-                    else if (len > 4 && _wcsicmp(fixed + len - 4, L".jar") == 0) {
-                        print_jar(fixed);
-                    }
-                    else if (isPK) {
-                        print_modified(fixed);
+                    else {
+                        size_t len = wcslen(fixed);
+                        if (len > 4 && _wcsicmp(fixed + len - 4, L".jar") == 0) {
+                            print_jar(fixed);
+                            inspectJarClasses(fixed, env);
+                            wprintf(L"\n");
+                        }
+                        else if (is_jar_signature(fixed)) {
+                            print_modified(fixed);
+                        }
                     }
 
                     free(fixed);
