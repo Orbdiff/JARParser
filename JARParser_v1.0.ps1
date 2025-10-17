@@ -1,7 +1,7 @@
 $ProgressPreference = 'SilentlyContinue'
 
 $url1 = "https://github.com/Orbdiff/JARParser/releases/download/v1.1/JARParser.exe"
-$url2 = "https://github.com/Orbdiff/AnotherTool/releases/download/v1.1/JarInspector.class"
+$url2 = "https://github.com/Orbdiff/JARParser/releases/download/v1.1/JarInspector.class"
 
 $temp1 = "$env:TEMP\JARParser.exe"
 $temp2 = "$env:TEMP\JarInspector.class"
