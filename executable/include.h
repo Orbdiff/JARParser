@@ -1,5 +1,11 @@
 ﻿#pragma once
 
+#ifndef __cplusplus
+typedef int bool;
+#define true 1
+#define false 0
+#endif
+
 #define _CRT_SECURE_NO_WARNINGS
 #include <windows.h>
 #include <stdio.h>
@@ -50,22 +56,30 @@ static void print_modified(wchar_t* text) {
     SetConsoleTextAttribute(hConsole, originalAttrs);
 }
 
-int ReadRegistryStringC(HKEY hKeyRoot, const wchar_t* subKey, const wchar_t* valueName, wchar_t* buffer, DWORD bufferSize) {
+int ReadRegistryStringC(HKEY hKeyRoot, const wchar_t* subKey, const wchar_t* valueName, wchar_t* buffer, DWORD bufferSize)
+{
+    if (buffer == NULL || bufferSize == 0)
+        return 0;
+
     HKEY hKey;
     LONG result = RegOpenKeyExW(hKeyRoot, subKey, 0, KEY_READ, &hKey);
-    if (result != ERROR_SUCCESS) {
+    if (result != ERROR_SUCCESS)
         return 0;
-    }
 
     DWORD type = 0;
-    result = RegQueryValueExW(hKey, valueName, NULL, &type, (LPBYTE)buffer, &bufferSize);
+    DWORD dataSize = bufferSize;
+
+    result = RegQueryValueExW(hKey, valueName, NULL, &type, (LPBYTE)buffer, &dataSize);
     RegCloseKey(hKey);
 
-    if (result != ERROR_SUCCESS || type != REG_SZ) {
+    if (result != ERROR_SUCCESS || type != REG_SZ)
         return 0;
-    }
 
-    buffer[(bufferSize / sizeof(wchar_t)) - 1] = L'\0';
+    size_t lastChar = dataSize / sizeof(wchar_t);
+    if (lastChar >= bufferSize / sizeof(wchar_t))
+        lastChar = (bufferSize / sizeof(wchar_t)) - 1;
+
+    buffer[lastChar] = L'\0';
     return 1;
 }
 
@@ -212,11 +226,13 @@ void JARParser(void) {
     JavaVM* jvm = NULL;
     JNIEnv* env = NULL;
 
-    //JVM
+    // JVM
     if (!GetJavaVM(&env, &jvm)) {
         FindClose(hFind);
         return;
     }
+
+    bool found = false;
 
     do {
         if (!(ffd.dwFileAttributes & FILE_ATTRIBUTE_DIRECTORY)) {
@@ -245,6 +261,8 @@ void JARParser(void) {
                 prefetch_close(p);
                 continue;
             }
+
+            found = true;
 
             wprintf(L"\nFile Name: %ls\n", ffd.cFileName);
 
@@ -291,6 +309,7 @@ void JARParser(void) {
 
     FindClose(hFind);
 
-    DcomLaunchStrings();
-    ProcessUSNJournal();
+    if (!found) {
+        wprintf(L"\n[!] No JAVA or JAVAW pfs files after logon time were found.\n");
+    }
 }

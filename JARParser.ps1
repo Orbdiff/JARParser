@@ -5,7 +5,7 @@ $ProgressPreference = 'SilentlyContinue'
 $folder = "$env:TEMP\JARParserTool"
 if (-not (Test-Path $folder)) { New-Item -Path $folder -ItemType Directory | Out-Null }
 
-$url1 = "https://github.com/Orbdiff/JARParser/releases/download/v1.1/JARParser.exe"
+$url1 = "https://github.com/Orbdiff/JARParser/releases/download/v1.2/JARParser.exe"
 $url2 = "https://github.com/Orbdiff/JARParser/releases/download/v1.1/JarInspector.class"
 
 $file1 = Join-Path $folder "JARParser.exe"

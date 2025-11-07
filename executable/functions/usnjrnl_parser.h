@@ -1,4 +1,4 @@
-#pragma once
+﻿#pragma once
 #define _CRT_SECURE_NO_WARNINGS
 #include <windows.h>
 #include <winioctl.h>
@@ -33,7 +33,8 @@ static void RenameCache_Free(RenameCache* c) {
     c->head = NULL;
 }
 
-static void RenameCache_Insert(RenameCache* c, ULONGLONG fileRef, const char* oldName, time_t t) {
+static void RenameCache_Insert(RenameCache* c, ULONGLONG fileRef, const char* oldName, time_t t)
+{
     RenameEntry* it = c->head;
     while (it) {
         if (it->fileRef == fileRef) {
@@ -44,7 +45,11 @@ static void RenameCache_Insert(RenameCache* c, ULONGLONG fileRef, const char* ol
         }
         it = it->next;
     }
+
     RenameEntry* n = (RenameEntry*)malloc(sizeof(RenameEntry));
+    if (n == NULL)
+        return;
+
     n->fileRef = fileRef;
     n->oldName = _strdup(oldName);
     n->time = t;

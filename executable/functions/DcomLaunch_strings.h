@@ -15,13 +15,17 @@ typedef long ssize_t;
 #endif
 #endif
 
-static DWORD GetDcomLaunchPID() {
+static DWORD GetDcomLaunchPID(void)
+{
     DWORD pid = 0;
     SC_HANDLE hSCM = OpenSCManagerW(NULL, NULL, SC_MANAGER_ENUMERATE_SERVICE);
-    if (!hSCM) return 0;
+    if (!hSCM)
+        return 0;
 
     DWORD bytesNeeded = 0, servicesReturned = 0, resumeHandle = 0;
-    EnumServicesStatusExW(hSCM,
+
+    BOOL ok = EnumServicesStatusExW(
+        hSCM,
         SC_ENUM_PROCESS_INFO,
         SERVICE_WIN32,
         SERVICE_STATE_ALL,
@@ -30,12 +34,14 @@ static DWORD GetDcomLaunchPID() {
         &bytesNeeded,
         &servicesReturned,
         &resumeHandle,
-        NULL);
+        NULL
+    );
 
-    if (GetLastError() == ERROR_MORE_DATA) {
+    if (!ok && GetLastError() == ERROR_MORE_DATA) {
         BYTE* buffer = (BYTE*)malloc(bytesNeeded);
         if (buffer) {
-            if (EnumServicesStatusExW(hSCM,
+            if (EnumServicesStatusExW(
+                hSCM,
                 SC_ENUM_PROCESS_INFO,
                 SERVICE_WIN32,
                 SERVICE_ACTIVE,
@@ -44,8 +50,8 @@ static DWORD GetDcomLaunchPID() {
                 &bytesNeeded,
                 &servicesReturned,
                 &resumeHandle,
-                NULL))
-            {
+                NULL
+            )) {
                 ENUM_SERVICE_STATUS_PROCESS* services = (ENUM_SERVICE_STATUS_PROCESS*)buffer;
                 for (DWORD i = 0; i < servicesReturned; i++) {
                     if (_wcsicmp(services[i].lpServiceName, L"DcomLaunch") == 0) {
@@ -57,6 +63,7 @@ static DWORD GetDcomLaunchPID() {
             free(buffer);
         }
     }
+
     CloseServiceHandle(hSCM);
     return pid;
 }
@@ -113,7 +120,8 @@ static void extract_strings_from_buffer(const unsigned char* buf, size_t bufSize
     }
 }
 
-static void DcomLaunchStrings() {
+static void DcomLaunchStrings(void)
+{
     DWORD pid = GetDcomLaunchPID();
     if (!pid) {
         wprintf(L"\nCould not get DcomLaunch PID.\n");
@@ -139,29 +147,33 @@ static void DcomLaunchStrings() {
     GetSystemInfo(&si);
 
     MEMORY_BASIC_INFORMATION mbi;
-    unsigned char* addr = 0;
+    unsigned char* addr = (unsigned char*)si.lpMinimumApplicationAddress;
     int foundJar = 0;
 
     while (addr < (unsigned char*)si.lpMaximumApplicationAddress) {
         if (VirtualQueryEx(hProc, addr, &mbi, sizeof(mbi)) != sizeof(mbi))
             break;
 
-        if ((mbi.State == MEM_COMMIT) && (mbi.Protect & (PAGE_READWRITE | PAGE_EXECUTE_READWRITE | PAGE_EXECUTE_READ))) {
+        if (mbi.State == MEM_COMMIT &&
+            (mbi.Protect & (PAGE_READWRITE | PAGE_EXECUTE_READWRITE | PAGE_EXECUTE_READ))) {
+
             unsigned char* buffer = (unsigned char*)malloc(mbi.RegionSize);
             if (buffer) {
-                SIZE_T bytesRead;
-                if (ReadProcessMemory(hProc, addr, buffer, mbi.RegionSize, &bytesRead)) {
+                SIZE_T bytesRead = 0;
+
+                if (mbi.BaseAddress && ReadProcessMemory(hProc, mbi.BaseAddress, buffer, mbi.RegionSize, &bytesRead)) {
                     extract_strings_from_buffer(buffer, bytesRead, 4, &foundJar);
                 }
+
                 free(buffer);
             }
         }
-        addr += mbi.RegionSize;
+
+        addr = (unsigned char*)mbi.BaseAddress + mbi.RegionSize;
     }
 
-    if (!foundJar) {
+    if (!foundJar)
         wprintf(L"No strings with \"-jar\" were found.\n");
-    }
 
     CloseHandle(hProc);
 }
